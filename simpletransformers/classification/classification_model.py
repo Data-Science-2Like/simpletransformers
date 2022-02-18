@@ -4,6 +4,7 @@
 
 from __future__ import absolute_import, division, print_function
 import collections
+import copy
 import logging
 import math
 import os
@@ -365,9 +366,12 @@ class ClassificationModel:
         else:
             self.device = "cpu"
 
-        self.loss_fct = init_loss(
-            weight=self.weight, device=self.device, args=self.args
-        )
+        if "loss_fct" in kwargs:
+            self.loss_fct = kwargs.pop("loss_fct")
+        else:
+            self.loss_fct = init_loss(
+                weight=self.weight, device=self.device, args=self.args
+            )
 
         if self.args.onnx:
             from onnxruntime import InferenceSession, SessionOptions
@@ -592,13 +596,23 @@ class ClassificationModel:
             train_dataset = self.load_and_cache_examples(
                 train_examples, verbose=verbose
             )
-        train_sampler = RandomSampler(train_dataset)
-        train_dataloader = DataLoader(
-            train_dataset,
-            sampler=train_sampler,
-            batch_size=self.args.train_batch_size,
-            num_workers=self.args.dataloader_num_workers,
-        )
+
+        if "batch_sampler" in kwargs:
+            train_sampler = copy.deepcopy(kwargs["batch_sampler"])
+            train_sampler.set_data_source(train_dataset)
+            train_dataloader = DataLoader(
+                train_dataset,
+                batch_sampler=train_sampler,
+                num_workers=self.args.dataloader_num_workers,
+            )
+        else:
+            train_sampler = RandomSampler(train_dataset)
+            train_dataloader = DataLoader(
+                train_dataset,
+                sampler=train_sampler,
+                batch_size=self.args.train_batch_size,
+                num_workers=self.args.dataloader_num_workers,
+            )
 
         os.makedirs(output_dir, exist_ok=True)
 
@@ -1441,10 +1455,21 @@ class ClassificationModel:
                 )
         os.makedirs(eval_output_dir, exist_ok=True)
 
-        eval_sampler = SequentialSampler(eval_dataset)
-        eval_dataloader = DataLoader(
-            eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size
-        )
+        if "batch_sampler" in kwargs:
+            eval_sampler = kwargs.pop("batch_sampler")
+            eval_sampler.set_data_source(eval_dataset)
+            eval_dataloader = DataLoader(
+                eval_dataset,
+                batch_sampler=eval_sampler
+            )
+            eval_examples = None  # as we cannot be sure what eval_sampler does
+        else:
+            eval_sampler = SequentialSampler(eval_dataset)
+            eval_dataloader = DataLoader(
+                eval_dataset,
+                sampler=eval_sampler,
+                batch_size=args.eval_batch_size
+            )
 
         if args.n_gpu > 1:
             model = torch.nn.DataParallel(model)
@@ -1452,11 +1477,14 @@ class ClassificationModel:
         eval_loss = 0.0
         nb_eval_steps = 0
         n_batches = len(eval_dataloader)
-        preds = np.empty((len(eval_dataset), self.num_labels))
+        amount_of_preds = n_batches * self.args.eval_batch_size
+        if amount_of_preds > len(eval_dataset):
+            amount_of_preds = len(eval_dataset)
+        preds = np.empty((amount_of_preds, self.num_labels))
         if multi_label:
-            out_label_ids = np.empty((len(eval_dataset), self.num_labels))
+            out_label_ids = np.empty((amount_of_preds, self.num_labels))
         else:
-            out_label_ids = np.empty((len(eval_dataset)))
+            out_label_ids = np.empty((amount_of_preds))
         model.eval()
 
         if self.args.fp16:
@@ -1506,7 +1534,7 @@ class ClassificationModel:
             end_index = (
                 start_index + self.args.eval_batch_size
                 if i != (n_batches - 1)
-                else len(eval_dataset)
+                else amount_of_preds
             )
             preds[start_index:end_index] = logits.detach().cpu().numpy()
             out_label_ids[start_index:end_index] = (
