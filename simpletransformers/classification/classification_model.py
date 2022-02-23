@@ -529,7 +529,10 @@ class ClassificationModel:
             )
         self._move_model_to_device()
 
-        if self.args.use_hf_datasets:
+        if "DatasetClass" in kwargs:
+            DatasetClass = kwargs.pop("DatasetClass")
+            train_dataset = DatasetClass(train_df, self.tokenizer, self.args)
+        elif self.args.use_hf_datasets:
             if self.args.sliding_window:
                 raise ValueError(
                     "HuggingFace Datasets cannot be used with sliding window."
@@ -1381,7 +1384,11 @@ class ClassificationModel:
         eval_output_dir = output_dir
 
         results = {}
-        if self.args.use_hf_datasets:
+        if "DatasetClass" in kwargs:
+            DatasetClass = kwargs.pop("DatasetClass")
+            eval_dataset = DatasetClass(eval_df, self.tokenizer, self.args)
+            eval_examples = None
+        elif self.args.use_hf_datasets:
             if self.args.sliding_window:
                 raise ValueError(
                     "HuggingFace Datasets cannot be used with sliding window."
