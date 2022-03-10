@@ -4,7 +4,6 @@
 
 from __future__ import absolute_import, division, print_function
 import collections
-import copy
 import logging
 import math
 import os
@@ -530,7 +529,7 @@ class ClassificationModel:
         self._move_model_to_device()
 
         if "DatasetClass" in kwargs:
-            DatasetClass = kwargs.pop("DatasetClass")
+            DatasetClass = kwargs["DatasetClass"]
             train_dataset = DatasetClass(train_df, self.tokenizer, self.args)
         elif self.args.use_hf_datasets:
             if self.args.sliding_window:
@@ -600,12 +599,12 @@ class ClassificationModel:
                 train_examples, verbose=verbose
             )
 
-        if "batch_sampler" in kwargs:
-            train_sampler = copy.deepcopy(kwargs["batch_sampler"])
-            train_sampler.set_data_source(train_dataset)
+        if "train_batch_sampler" in kwargs:
+            train_batch_sampler = kwargs.pop("train_batch_sampler")
+            train_batch_sampler.set_data_source(train_dataset)
             train_dataloader = DataLoader(
                 train_dataset,
-                batch_sampler=train_sampler,
+                batch_sampler=train_batch_sampler,
                 num_workers=self.args.dataloader_num_workers,
             )
         else:
@@ -874,6 +873,7 @@ class ClassificationModel:
 
         for _ in train_iterator:
             model.train()
+            self.loss_fct.train()
             if epochs_trained > 0:
                 epochs_trained -= 1
                 continue
@@ -1144,6 +1144,7 @@ class ClassificationModel:
                                             else training_progress_scores,
                                         )
                         model.train()
+                        self.loss_fct.train()
 
             epoch_number += 1
             output_dir_current = os.path.join(
@@ -1462,21 +1463,10 @@ class ClassificationModel:
                 )
         os.makedirs(eval_output_dir, exist_ok=True)
 
-        if "batch_sampler" in kwargs:
-            eval_sampler = kwargs.pop("batch_sampler")
-            eval_sampler.set_data_source(eval_dataset)
-            eval_dataloader = DataLoader(
-                eval_dataset,
-                batch_sampler=eval_sampler
-            )
-            eval_examples = None  # as we cannot be sure what eval_sampler does
-        else:
-            eval_sampler = SequentialSampler(eval_dataset)
-            eval_dataloader = DataLoader(
-                eval_dataset,
-                sampler=eval_sampler,
-                batch_size=args.eval_batch_size
-            )
+        eval_sampler = SequentialSampler(eval_dataset)
+        eval_dataloader = DataLoader(
+            eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size
+        )
 
         if args.n_gpu > 1:
             model = torch.nn.DataParallel(model)
@@ -1484,15 +1474,13 @@ class ClassificationModel:
         eval_loss = 0.0
         nb_eval_steps = 0
         n_batches = len(eval_dataloader)
-        amount_of_preds = n_batches * self.args.eval_batch_size
-        if amount_of_preds > len(eval_dataset):
-            amount_of_preds = len(eval_dataset)
-        preds = np.empty((amount_of_preds, self.num_labels))
+        preds = np.empty((len(eval_dataset), self.num_labels))
         if multi_label:
-            out_label_ids = np.empty((amount_of_preds, self.num_labels))
+            out_label_ids = np.empty((len(eval_dataset), self.num_labels))
         else:
-            out_label_ids = np.empty((amount_of_preds))
+            out_label_ids = np.empty((len(eval_dataset)))
         model.eval()
+        self.loss_fct.eval()
 
         if self.args.fp16:
             from torch.cuda import amp
@@ -1541,7 +1529,7 @@ class ClassificationModel:
             end_index = (
                 start_index + self.args.eval_batch_size
                 if i != (n_batches - 1)
-                else amount_of_preds
+                else len(eval_dataset)
             )
             preds[start_index:end_index] = logits.detach().cpu().numpy()
             out_label_ids[start_index:end_index] = (
@@ -2086,6 +2074,7 @@ class ClassificationModel:
 
             if self.config.output_hidden_states:
                 model.eval()
+                self.loss_fct.eval()
                 preds = None
                 out_label_ids = None
                 for i, batch in enumerate(
@@ -2166,6 +2155,7 @@ class ClassificationModel:
                 n_batches = len(eval_dataloader)
                 for i, batch in enumerate(tqdm(eval_dataloader, disable=args.silent)):
                     model.eval()
+                    self.loss_fct.eval()
                     # batch = tuple(t.to(device) for t in batch)
 
                     with torch.no_grad():
