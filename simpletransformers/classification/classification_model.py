@@ -365,9 +365,12 @@ class ClassificationModel:
         else:
             self.device = "cpu"
 
-        self.loss_fct = init_loss(
-            weight=self.weight, device=self.device, args=self.args
-        )
+        if "loss_fct" in kwargs:
+            self.loss_fct = kwargs.pop("loss_fct")
+        else:
+            self.loss_fct = init_loss(
+                weight=self.weight, device=self.device, args=self.args
+            )
 
         if self.args.onnx:
             from onnxruntime import InferenceSession, SessionOptions
@@ -525,7 +528,10 @@ class ClassificationModel:
             )
         self._move_model_to_device()
 
-        if self.args.use_hf_datasets:
+        if "DatasetClass" in kwargs:
+            DatasetClass = kwargs["DatasetClass"]
+            train_dataset = DatasetClass(train_df, self.tokenizer, self.args)
+        elif self.args.use_hf_datasets:
             if self.args.sliding_window:
                 raise ValueError(
                     "HuggingFace Datasets cannot be used with sliding window."
@@ -592,13 +598,23 @@ class ClassificationModel:
             train_dataset = self.load_and_cache_examples(
                 train_examples, verbose=verbose
             )
-        train_sampler = RandomSampler(train_dataset)
-        train_dataloader = DataLoader(
-            train_dataset,
-            sampler=train_sampler,
-            batch_size=self.args.train_batch_size,
-            num_workers=self.args.dataloader_num_workers,
-        )
+
+        if "train_batch_sampler" in kwargs:
+            train_batch_sampler = kwargs.pop("train_batch_sampler")
+            train_batch_sampler.set_data_source(train_dataset)
+            train_dataloader = DataLoader(
+                train_dataset,
+                batch_sampler=train_batch_sampler,
+                num_workers=self.args.dataloader_num_workers,
+            )
+        else:
+            train_sampler = RandomSampler(train_dataset)
+            train_dataloader = DataLoader(
+                train_dataset,
+                sampler=train_sampler,
+                batch_size=self.args.train_batch_size,
+                num_workers=self.args.dataloader_num_workers,
+            )
 
         os.makedirs(output_dir, exist_ok=True)
 
@@ -857,6 +873,7 @@ class ClassificationModel:
 
         for _ in train_iterator:
             model.train()
+            self.loss_fct.train()
             if epochs_trained > 0:
                 epochs_trained -= 1
                 continue
@@ -1127,6 +1144,7 @@ class ClassificationModel:
                                             else training_progress_scores,
                                         )
                         model.train()
+                        self.loss_fct.train()
 
             epoch_number += 1
             output_dir_current = os.path.join(
@@ -1367,7 +1385,11 @@ class ClassificationModel:
         eval_output_dir = output_dir
 
         results = {}
-        if self.args.use_hf_datasets:
+        if "DatasetClass" in kwargs:
+            DatasetClass = kwargs.pop("DatasetClass")
+            eval_dataset = DatasetClass(eval_df, self.tokenizer, self.args)
+            eval_examples = None
+        elif self.args.use_hf_datasets:
             if self.args.sliding_window:
                 raise ValueError(
                     "HuggingFace Datasets cannot be used with sliding window."
@@ -1458,6 +1480,7 @@ class ClassificationModel:
         else:
             out_label_ids = np.empty((len(eval_dataset)))
         model.eval()
+        self.loss_fct.eval()
 
         if self.args.fp16:
             from torch.cuda import amp
@@ -2051,6 +2074,7 @@ class ClassificationModel:
 
             if self.config.output_hidden_states:
                 model.eval()
+                self.loss_fct.eval()
                 preds = None
                 out_label_ids = None
                 for i, batch in enumerate(
@@ -2131,6 +2155,7 @@ class ClassificationModel:
                 n_batches = len(eval_dataloader)
                 for i, batch in enumerate(tqdm(eval_dataloader, disable=args.silent)):
                     model.eval()
+                    self.loss_fct.eval()
                     # batch = tuple(t.to(device) for t in batch)
 
                     with torch.no_grad():
