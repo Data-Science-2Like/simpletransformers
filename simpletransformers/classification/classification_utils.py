@@ -47,6 +47,7 @@ except ImportError:
     torchvision_available = False
 
 from copy import deepcopy
+import pandas as pd
 
 csv.field_size_limit(2147483647)
 
@@ -951,6 +952,78 @@ class LazyClassificationDataset(Dataset):
             .rstrip("\n")
             .split(self.delimiter)
         )
+
+        if not self.text_a_column and not self.text_b_column:
+            text = line[self.text_column]
+            label = line[self.labels_column]
+
+            # If labels_map is defined, then labels need to be replaced with ints
+            if self.args.labels_map:
+                label = self.args.labels_map[label]
+            if self.args.regression:
+                label = torch.tensor(float(label), dtype=torch.float)
+            else:
+                label = torch.tensor(int(label), dtype=torch.long)
+
+            return (
+                self.tokenizer.encode_plus(
+                    text,
+                    max_length=self.args.max_seq_length,
+                    pad_to_max_length=self.args.max_seq_length,
+                    return_tensors="pt",
+                ),
+                label,
+            )
+        else:
+            text_a = line[self.text_a_column]
+            text_b = line[self.text_b_column]
+            label = line[self.labels_column]
+            if self.args.regression:
+                label = torch.tensor(float(label), dtype=torch.float)
+            else:
+                label = torch.tensor(int(label), dtype=torch.long)
+
+            return (
+                self.tokenizer.encode_plus(
+                    text_a,
+                    text_pair=text_b,
+                    max_length=self.args.max_seq_length,
+                    pad_to_max_length=self.args.max_seq_length,
+                    return_tensors="pt",
+                ),
+                label,
+            )
+
+    def __len__(self):
+        return self.num_entries
+
+
+class LargeLazyClassificationDataset(Dataset):
+    # This is a modified version of the LazyClassificationDataset class.
+    # We changed the way self.num_entries is determined and
+    # how the line variable is getting retrieved in the __getitem__ method.
+    # This way larger datasets can be processed without running out of memory.
+
+    def __init__(self, data_file, tokenizer, args):
+        self.data_file = data_file
+        self.start_row = args.lazy_loading_start_line
+        self.delimiter = args.lazy_delimiter
+        self.data_frame = pd.read_csv(self.data_file, sep=self.delimiter, skiprows=self.start_row, header=None)
+        self.num_entries = len(self.data_frame)
+        self.tokenizer = tokenizer
+        self.args = args
+        if args.lazy_text_a_column is not None and args.lazy_text_b_column is not None:
+            self.text_a_column = args.lazy_text_a_column
+            self.text_b_column = args.lazy_text_b_column
+            self.text_column = None
+        else:
+            self.text_column = args.lazy_text_column
+            self.text_a_column = None
+            self.text_b_column = None
+        self.labels_column = args.lazy_labels_column
+
+    def __getitem__(self, idx):
+        line = self.data_frame.loc[idx, :]
 
         if not self.text_a_column and not self.text_b_column:
             text = line[self.text_column]
